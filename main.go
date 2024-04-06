@@ -95,20 +95,9 @@ func main() {
 				if entryCount%50000 == 0 {
 					fmt.Printf("Parsed %d entries\n", entryCount)
 				}
-
-				// if currentEntry.SortKey == "braukt" {
-				// if currentEntry.SortKey == "sieviete" {
-				// 	jsonEntry, _ := json.MarshalIndent(currentEntry, "", "  ")
-				// 	fmt.Println(string(jsonEntry))
-				// 	fmt.Printf("%+v\n", currentEntry)
-				// }
 			}
 		}
 	}
-
-	// fmt.Println(currentEntry)
-	// fmt.Printf("%+v\n", currentEntry)
-	// fmt.Printf("%+v\n", senseTypes)
 
 	fmt.Printf("Finished parsing %d entries\n", entryCount)
 	fmt.Printf("Wrote %d definitions to %s\n", defCount, "def.txt")
