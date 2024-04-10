@@ -65,8 +65,8 @@ func writeDefinitions(defFile *os.File, id string, sortKey string, sense []Sense
 }
 
 var (
-	entryQuery = `INSERT INTO entry (id, n, type, sort_key) VALUES ($1, $2, $3, $4)`
-	senseQuery = `INSERT INTO sense (id, n, def, parent_id, entry_id) VALUES ($1, $2, $3, $4, $5)`
+	entryQuery = `INSERT INTO entries (id, n, type, sort_key) VALUES ($1, $2, $3, $4)`
+	senseQuery = `INSERT INTO senses (id, n, def, parent_id, entry_id) VALUES ($1, $2, $3, $4, $5)`
 )
 
 func addEntryToBatch(batch *pgx.Batch, entry Entry) {
@@ -74,35 +74,39 @@ func addEntryToBatch(batch *pgx.Batch, entry Entry) {
 	addSensesToBatch(batch, entry.Sense, nil, entry.Id)
 }
 
-func addSensesToBatch(batch *pgx.Batch, senses []Sense, parentId any, entryId any) {
+func addSensesToBatch(batch *pgx.Batch, senses []Sense, parentId any, entryId string) {
 	for _, s := range senses {
 		batch.Queue(senseQuery, s.Id, s.N, s.Def, parentId, entryId)
 		if len(s.Sense) > 0 {
-			addSensesToBatch(batch, s.Sense, s.Id, nil)
+			addSensesToBatch(batch, s.Sense, s.Id, entryId)
 		}
 	}
 }
 
 func createTables(conn *pgx.Conn) {
 	_, err := conn.Exec(context.Background(), `
-		DROP TABLE IF EXISTS entry CASCADE;
-		DROP TABLE IF EXISTS sense;
+		DROP TABLE IF EXISTS entries CASCADE;
+		DROP TABLE IF EXISTS senses;
 
-		CREATE TABLE entry (
+		CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+		CREATE TABLE entries (
 			id TEXT PRIMARY KEY,
 			n INTEGER NOT NULL,
 			type TEXT NOT NULL,
 			sort_key TEXT NOT NULL
 		);
 
-		CREATE TABLE sense (
+		CREATE TABLE senses (
 			id TEXT PRIMARY KEY,
 			n INTEGER NOT NULL,
 			def TEXT NOT NULL,
-			parent_id TEXT REFERENCES sense(id),
-			entry_id TEXT REFERENCES entry(id)
+			parent_id TEXT REFERENCES senses(id),
+			entry_id TEXT REFERENCES entries(id)
 		);
 		
+		CREATE INDEX def_gin_trgm_idx ON senses USING gin(def gin_trgm_ops);
+		CREATE INDEX sort_key_gin_trgm_idx ON entries USING gin(sort_key gin_trgm_ops);
 	`)
 	// ALTER TABLE Sense ADD COLUMN entry_id TEXT REFERENCES Entry(id);
 	if err != nil {
@@ -150,7 +154,7 @@ func main() {
 
 	if *pgCreateTable {
 		createTables(pgConn)
-		fmt.Println("Created 'entry' and 'sense' tables")
+		fmt.Println("Created 'entries' and 'senses' tables")
 	}
 
 	start := time.Now()
