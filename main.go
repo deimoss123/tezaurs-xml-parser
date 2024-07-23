@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
@@ -15,19 +16,33 @@ import (
 
 type Entry struct {
 	// XMLName xml.Name `xml:"entry"`
-	SortKey string  `xml:"sortKey,attr"`
-	Id      string  `xml:"id,attr"`
-	N       int     `xml:"n,attr"`
-	Type    string  `xml:"type,attr"` // abbr, affix, foreign, main, mwe
-	Sense   []Sense `xml:"sense"`
+	SortKey string    `xml:"sortKey,attr"`
+	Id      string    `xml:"id,attr"`
+	N       int       `xml:"n,attr"`
+	Type    string    `xml:"type,attr"` // abbr, affix, foreign, main, mwe
+	Sense   []Sense   `xml:"sense"`
+	GramGrp []GramGrp `xml:"form>gramGrp"`
 }
 
 type Sense struct {
 	// XMLName xml.Name `xml:"sense"`
-	Id    string  `xml:"id,attr"`
-	N     int     `xml:"n,attr"`
-	Def   string  `xml:"def"`
-	Sense []Sense `xml:"sense"`
+	Id      string    `xml:"id,attr"`
+	N       int       `xml:"n,attr"`
+	Def     string    `xml:"def"`
+	Sense   []Sense   `xml:"sense"`
+	GramGrp []GramGrp `xml:"gramGrp"`
+}
+
+type Gram struct {
+	Type  string `xml:"type,attr" json:"type"`
+	Value string `xml:",innerxml" json:"$"`
+}
+
+type GramGrp struct {
+	Type    string    `xml:"type,attr" json:"type"`
+	SubType string    `xml:"subtype,attr" json:"subtype"`
+	GramGrp []GramGrp `xml:"gramGrp" json:"$"`
+	Gram    []Gram    `xml:"gram" json:"gram"`
 }
 
 type Measure struct {
@@ -65,18 +80,29 @@ func writeDefinitions(defFile *os.File, id string, sortKey string, sense []Sense
 }
 
 var (
-	entryQuery = `INSERT INTO entries (id, n, type, sort_key) VALUES ($1, $2, $3, $4)`
-	senseQuery = `INSERT INTO senses (id, n, def, parent_id, entry_id) VALUES ($1, $2, $3, $4, $5)`
+	entryQuery = `INSERT INTO entries (id, n, type, sort_key, gramgrp) VALUES ($1, $2, $3, $4, $5)`
+	senseQuery = `INSERT INTO senses (id, n, def, gramgrp, parent_id, entry_id) VALUES ($1, $2, $3, $4, $5, $6)`
 )
 
 func addEntryToBatch(batch *pgx.Batch, entry Entry) {
-	batch.Queue(entryQuery, entry.Id, entry.N, entry.Type, entry.SortKey)
+	gramGrpJson, err := json.Marshal(entry.GramGrp)
+
+	if err != nil {
+		log.Fatal("Error marshalling GramGrp: ", err)
+	}
+
+	batch.Queue(entryQuery, entry.Id, entry.N, entry.Type, entry.SortKey, gramGrpJson)
 	addSensesToBatch(batch, entry.Sense, nil, entry.Id)
 }
 
 func addSensesToBatch(batch *pgx.Batch, senses []Sense, parentId any, entryId string) {
 	for _, s := range senses {
-		batch.Queue(senseQuery, s.Id, s.N, s.Def, parentId, entryId)
+		gramGrpJson, err := json.Marshal(s.GramGrp)
+		if err != nil {
+			log.Fatal("Error marshalling GramGrp: ", err)
+		}
+
+		batch.Queue(senseQuery, s.Id, s.N, s.Def, gramGrpJson, parentId, entryId)
 		if len(s.Sense) > 0 {
 			addSensesToBatch(batch, s.Sense, s.Id, entryId)
 		}
@@ -86,7 +112,7 @@ func addSensesToBatch(batch *pgx.Batch, senses []Sense, parentId any, entryId st
 func createTables(conn *pgx.Conn) {
 	_, err := conn.Exec(context.Background(), `
 		DROP TABLE IF EXISTS entries CASCADE;
-		DROP TABLE IF EXISTS senses;
+		DROP TABLE IF EXISTS senses CASCADE;
 
 		CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -94,13 +120,15 @@ func createTables(conn *pgx.Conn) {
 			id TEXT PRIMARY KEY,
 			n INTEGER NOT NULL,
 			type TEXT NOT NULL,
-			sort_key TEXT NOT NULL
+			sort_key TEXT NOT NULL,
+			gramgrp JSONB DEFAULT '[]'
 		);
 
 		CREATE TABLE senses (
 			id TEXT PRIMARY KEY,
 			n INTEGER NOT NULL,
 			def TEXT NOT NULL,
+			gramgrp JSONB DEFAULT '[]',
 			parent_id TEXT REFERENCES senses(id),
 			entry_id TEXT REFERENCES entries(id)
 		);
@@ -204,6 +232,10 @@ func main() {
 				if *pgString != "" {
 					addEntryToBatch(&batch, currentEntry)
 				}
+
+				// if len(currentEntry.Sense) > 0 {
+				// 	fmt.Printf("%+v\n", currentEntry)
+				// }
 
 				if entryCount%50000 == 0 {
 					fmt.Printf("Parsed %d entries of %d (%d%%)\n", entryCount, entryQty, entryCount*100/entryQty)
