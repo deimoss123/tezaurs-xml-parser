@@ -121,7 +121,8 @@ func createTables(conn *pgx.Conn) {
 			n INTEGER NOT NULL,
 			type TEXT NOT NULL,
 			sort_key TEXT NOT NULL,
-			gramgrp JSONB DEFAULT '[]'
+			gramgrp JSONB DEFAULT '[]',
+			has_multiple_entries BOOLEAN DEFAULT FALSE
 		);
 
 		CREATE TABLE senses (
@@ -266,6 +267,23 @@ func main() {
 	if err != nil {
 		log.Fatal("Error sending batch: ", err)
 	}
+
+	_, err = pgConn.Query(context.Background(), `
+		UPDATE entries
+		SET has_multiple_entries = TRUE
+		WHERE sort_key IN (
+			SELECT sort_key
+			FROM entries
+			GROUP BY sort_key
+			HAVING COUNT(*) > 1
+		);
+	`)
+
+	if err != nil {
+		log.Fatal("Error updating entries: ", err)
+	}
+
+	fmt.Println("Updated has_multiple_entries column in entries table")
 
 	fmt.Printf("Finished parsing %d entries\n", entryCount)
 
